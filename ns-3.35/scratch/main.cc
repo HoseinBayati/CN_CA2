@@ -203,7 +203,7 @@ public:
 
 private:
     virtual void StartApplication(void);
-    void HandleRead(Ptr<Socket> socket);
+    void HandleRead(Ptr<Socket> socket, const Address& master_addr);
     void SendDataToClient(Ptr<Socket> socket, char data);
 
     uint16_t port;
@@ -326,14 +326,14 @@ int main(int argc, char *argv[])
 
     Ipv4InterfaceContainer staNodeClientInterface;
     Ipv4InterfaceContainer staNodesMasterInterface;
-    Ipv4InterfaceContainer staNodesMapperInterface;
+    Ipv4InterfaceContainer staNodesMappersInterface;
 
     address.SetBase("10.1.3.0", "255.255.255.0");
 
     staNodeClientInterface = address.Assign(staDeviceClient);
     staNodesMasterInterface = address.Assign(staDeviceMaster);
 
-    staNodesMapperInterface = address.Assign(staDeviceMappers);
+    staNodesMappersInterface = address.Assign(staDeviceMappers);
 
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
 
@@ -345,14 +345,14 @@ int main(int argc, char *argv[])
     clientApp->SetStartTime(Seconds(0.0));
     clientApp->SetStopTime(Seconds(duration));
 
-    Ptr<master> masterApp = CreateObject<master>(port, staNodesMasterInterface, staNodesMapperInterface);
+    Ptr<master> masterApp = CreateObject<master>(port, staNodesMasterInterface, staNodesMappersInterface);
     wifiStaNodeMaster.Get(0)->AddApplication(masterApp);
     masterApp->SetStartTime(Seconds(0.0));
     masterApp->SetStopTime(Seconds(duration));
 
     for (int i = 0; i < MAPPER_COUNT; i++)
     {
-        Ptr<mapper> mapperApp = CreateObject<mapper>(port, staNodesMapperInterface, decode_maps[i], staNodeClientInterface, i + 1);
+        Ptr<mapper> mapperApp = CreateObject<mapper>(port, staNodesMappersInterface, decode_maps[i], staNodeClientInterface, i);
         wifiStaNodeMappers.Get(i)->AddApplication(mapperApp);
         mapperApp->SetStartTime(Seconds(0.0));
         mapperApp->SetStopTime(Seconds(duration));
@@ -451,13 +451,13 @@ void master::StartApplication(void)
     InetSocketAddress local = InetSocketAddress(ip.GetAddress(0), port);
     socket->Bind(local);
 
-    // for (int i = 0; i < MAPPER_COUNT; i++)
-    // {
-    mapper_socket = Socket::CreateSocket(GetNode(), UdpSocketFactory::GetTypeId());
-    InetSocketAddress mapper_addr(targetIp.GetAddress(0), port);
+    for (int i = 0; i < MAPPER_COUNT; i++)
+    {
+        mapper_socket = Socket::CreateSocket(GetNode(), TcpSocketFactory::GetTypeId());
+        InetSocketAddress mapper_addr(targetIp.GetAddress(i), port);
 
-    mapper_socket->Connect(mapper_addr);
-    // }
+        mapper_socket->Connect(mapper_addr);
+    }
 
     socket->SetRecvCallback(MakeCallback(&master::HandleRead, this));
 }
@@ -508,8 +508,8 @@ mapper::~mapper()
 
 void mapper::StartApplication(void)
 {
-    socket = Socket::CreateSocket(GetNode(), UdpSocketFactory::GetTypeId());
-    InetSocketAddress local = InetSocketAddress(ip.GetAddress(0), port);
+    socket = Socket::CreateSocket(GetNode(), TcpSocketFactory::GetTypeId());
+    InetSocketAddress local = InetSocketAddress(ip.GetAddress(id), port);
     socket->Bind(local);
     socket->Listen();
 
@@ -518,7 +518,11 @@ void mapper::StartApplication(void)
 
     client_socket->Connect(sockAddr);
 
-    socket->SetRecvCallback(MakeCallback(&mapper::HandleRead, this));
+    socket->SetAcceptCallback(MakeNullCallback<bool,
+                                               Ptr<Socket>,
+                                               const Address &>(),
+                              MakeCallback(&mapper::HandleRead, this));
+
 }
 
 void mapper::SendDataToClient(Ptr<Socket> socket, char data)
@@ -532,8 +536,9 @@ void mapper::SendDataToClient(Ptr<Socket> socket, char data)
     socket->Send(packet);
 }
 
-void mapper::HandleRead(Ptr<Socket> socket)
+void mapper::HandleRead(Ptr<Socket> socket, const Address& addr)
 {
+    /// we may need a SetRecvCallback in here
     Ptr<Packet> packet;
 
     while ((packet = socket->Recv()))
